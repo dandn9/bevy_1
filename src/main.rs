@@ -23,6 +23,7 @@ fn main() {
         .add_startup_system(spawn_floor)
         .add_system(is_player_on_ground)
         .add_system(handle_input.after(is_player_on_ground))
+        .add_system(is_player_on_wall)
         .run();
 }
 
@@ -49,10 +50,17 @@ fn setup_physics(mut commands: Commands) {
 }
 
 fn is_player_on_wall(
-    player_q: Query<(&Collider, &Transform), With<Player>>,
+    player_q: Query<&Transform, With<Player>>,
     rapier_context: Res<RapierContext>,
     mut lines: ResMut<DebugLines>,
 ) {
+    let player_transform = player_q.get_single().unwrap();
+
+    let ray_pos = Vec2::new(
+        player_transform.translation.x - PLAYER_SIZE / 2.,
+        player_transform.translation.y,
+    );
+    let ray_dir = Vec2::new(player_transform.translation.x, ray_pos.y - 20.);
 }
 
 fn is_player_on_ground(
@@ -68,13 +76,20 @@ fn is_player_on_ground(
         player_transform.translation.x,
         player_transform.translation.y - (PLAYER_SIZE / 2.0),
     );
-    let ray_dir = Vec2::new(player_transform.translation.x, ray_pos.y - 20.);
+    // let ray_dir = Vec2::new(player_transform.translation.x, ray_pos.y - 20.);
+    let ray_dir = Vec2::new(0., -1.);
+    println!("xd {:?}", ray_pos.y - ray_dir.y);
 
-    let max_toi = 0.1;
+    let max_toi = 10.0;
+
     lines.line(
         Vec3::new(ray_pos.x, ray_pos.y, 0.),
-        Vec3::new(ray_dir.x, ray_dir.y, 0.),
-        1.,
+        Vec3::new(
+            ray_pos.x + (ray_dir.x * max_toi),
+            ray_pos.y + (ray_dir.y * max_toi),
+            0.,
+        ),
+        0.,
     );
 
     let solid = false;
@@ -83,6 +98,7 @@ fn is_player_on_ground(
 
     if let Some((_entity, _toi)) = rapier_context.cast_ray(ray_pos, ray_dir, max_toi, solid, filter)
     {
+        println!("Detect!");
         match *is_player_in_floor {
             IsPlayerInFloor(true) => {
                 *can_jump = CanJump(true);
