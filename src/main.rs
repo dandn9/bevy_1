@@ -1,4 +1,5 @@
 use bevy::{math::vec2, prelude::*, sprite::MaterialMesh2dBundle};
+use bevy_1::utils::{draw_line, draw_line_colored};
 use bevy_inspector_egui::{Inspectable, RegisterInspectable, WorldInspectorPlugin};
 use bevy_inspector_egui_rapier::InspectableRapierPlugin;
 use bevy_prototype_debug_lines::*;
@@ -11,6 +12,10 @@ const PLAYER_SIZE: f32 = 60.;
 fn main() {
     App::new()
         .insert_resource(CanJump(false))
+        .insert_resource(IsOnWall {
+            is_on_wall: false,
+            side: None,
+        })
         .add_plugins(DefaultPlugins)
         .add_plugin(WorldInspectorPlugin::new())
         .add_plugin(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
@@ -19,12 +24,23 @@ fn main() {
         .add_plugin(DebugLinesPlugin::default())
         .register_inspectable::<MeshType>()
         .add_startup_system(setup_physics)
-        .add_startup_system(setup)
         .add_startup_system(spawn_floor)
+        .add_startup_system_to_stage(StartupStage::PreStartup, setup)
+        .add_startup_system_to_stage(StartupStage::PostStartup, add_debug_view)
         .add_system(is_player_on_ground)
-        .add_system(handle_input.after(is_player_on_ground))
         .add_system(is_player_on_wall)
+        .add_system(handle_input.after(is_player_on_ground))
         .run();
+}
+#[derive(Debug)]
+enum WallSide {
+    Left,
+    Right,
+}
+#[derive(Debug)]
+struct IsOnWall {
+    is_on_wall: bool,
+    side: Option<WallSide>,
 }
 
 #[derive(Debug)]
@@ -53,14 +69,51 @@ fn is_player_on_wall(
     player_q: Query<&Transform, With<Player>>,
     rapier_context: Res<RapierContext>,
     mut lines: ResMut<DebugLines>,
+    mut res_is_on_wall: ResMut<IsOnWall>,
 ) {
-    let player_transform = player_q.get_single().unwrap();
+    let player = player_q.get_single().unwrap();
+    let player_transform = player;
 
-    let ray_pos = Vec2::new(
-        player_transform.translation.x - PLAYER_SIZE / 2.,
+    let l_ray_pos = Vec2::new(
+        player_transform.translation.x - (PLAYER_SIZE / 2.),
         player_transform.translation.y,
     );
-    let ray_dir = Vec2::new(player_transform.translation.x, ray_pos.y - 20.);
+    let l_ray_dir = Vec2::new(-1., 0.);
+    let max_toi = 10.0;
+
+    draw_line_colored(&l_ray_pos, &l_ray_dir, max_toi, &mut lines, None);
+    let r_ray_pos = Vec2::new(
+        player_transform.translation.x + (PLAYER_SIZE / 2.),
+        player_transform.translation.y,
+    );
+    let r_ray_dir = Vec2::new(1., 0.);
+    let max_toi = 10.0;
+
+    draw_line_colored(&r_ray_pos, &r_ray_dir, max_toi, &mut lines, None);
+
+    let solid = false;
+
+    let filter =
+        QueryFilter::new().groups(CollisionGroups::new(Group::GROUP_1, Group::GROUP_1).into());
+
+    let mut is_on_wall = false;
+    let mut side: Option<WallSide> = None;
+
+    if let Some((_entity, _toi)) =
+        rapier_context.cast_ray(r_ray_pos, r_ray_dir, max_toi, solid, filter)
+    {
+        is_on_wall = true;
+        side = Some(WallSide::Right);
+    } else {
+        if let Some((_entity, _toi)) =
+            rapier_context.cast_ray(l_ray_pos, l_ray_dir, max_toi, solid, filter)
+        {
+            is_on_wall = true;
+            side = Some(WallSide::Left);
+        }
+    }
+
+    *res_is_on_wall = IsOnWall { is_on_wall, side };
 }
 
 fn is_player_on_ground(
@@ -68,9 +121,15 @@ fn is_player_on_ground(
     mut is_player_in_floor: Local<IsPlayerInFloor>,
     player_q: Query<&Transform, With<Player>>,
     rapier_context: Res<RapierContext>,
-    mut lines: ResMut<DebugLines>,
+    lines: ResMut<DebugLines>,
 ) {
     let player_transform = player_q.get_single().unwrap();
+
+    let shape = Collider::cuboid((PLAYER_SIZE / 2.) - 3., 2.0);
+    let shape_pos = Vec2::new(1.0, 2.0);
+    let shape_rot = 0.8;
+    let shape_vel = Vec2::new(0.1, 0.4);
+    let max_toi = 4.0;
 
     let ray_pos = Vec2::new(
         player_transform.translation.x,
@@ -78,25 +137,17 @@ fn is_player_on_ground(
     );
     // let ray_dir = Vec2::new(player_transform.translation.x, ray_pos.y - 20.);
     let ray_dir = Vec2::new(0., -1.);
-    println!("xd {:?}", ray_pos.y - ray_dir.y);
 
-    let max_toi = 10.0;
+    // let max_toi = 10.0;
 
-    lines.line(
-        Vec3::new(ray_pos.x, ray_pos.y, 0.),
-        Vec3::new(
-            ray_pos.x + (ray_dir.x * max_toi),
-            ray_pos.y + (ray_dir.y * max_toi),
-            0.,
-        ),
-        0.,
-    );
+    draw_line(&ray_pos, &ray_dir, max_toi, lines);
 
     let solid = false;
     let filter =
         QueryFilter::new().groups(CollisionGroups::new(Group::GROUP_1, Group::GROUP_1).into());
 
-    if let Some((_entity, _toi)) = rapier_context.cast_ray(ray_pos, ray_dir, max_toi, solid, filter)
+    if let Some((_entity, _toi)) =
+        rapier_context.cast_shape(ray_pos, shape_rot, ray_dir, &shape, max_toi, filter)
     {
         println!("Detect!");
         match *is_player_in_floor {
@@ -121,10 +172,38 @@ fn is_player_on_ground(
         }
     }
 }
+fn add_debug_view(
+    mut commands: Commands,
+    player_q: Query<Entity, With<Player>>,
+    world: &World,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let player = player_q.get_single().unwrap();
+    // world.query()
+    commands.entity(player).insert_bundle(MaterialMesh2dBundle {
+        material: materials.add(ColorMaterial {
+            color: Color::rgba(1., 1., 1., 0.5),
+            ..Default::default()
+        }),
+        mesh: meshes
+            .add(Mesh::from(shape::Quad {
+                size: Vec2::new(PLAYER_SIZE, 5.),
+                flip: false,
+            }))
+            .into(),
+
+        ..default()
+    });
+
+    // commands.entity(player)
+    // println!("COMPONENTS PLAYER- {:?}", playerCommands.log_components())
+}
 
 fn handle_input(
     mut commands: Commands,
     keys: Res<Input<KeyCode>>,
+    is_on_wall: Res<IsOnWall>,
     mut dbg: ResMut<DebugRenderContext>,
     mut can_jump: ResMut<CanJump>,
     mut player_q: Query<(Entity, &mut Velocity), With<Player>>,
@@ -150,10 +229,29 @@ fn handle_input(
         }
     }
     if keys.pressed(KeyCode::A) {
-        (*player.1).linvel = vec2(-200.0, (*player.1).linvel.y);
+        match *is_on_wall {
+            IsOnWall {
+                is_on_wall: true,
+                side: Some(WallSide::Left),
+            } => {
+                (*player.1).linvel = Vec2::new(-200., -200.);
+            }
+            _ => {
+                (*player.1).linvel = vec2(-200.0, (*player.1).linvel.y);
+            }
+        }
     }
     if keys.pressed(KeyCode::D) {
-        (*player.1).linvel = vec2(200.0, (*player.1).linvel.y);
+        match *is_on_wall {
+            IsOnWall {
+                is_on_wall: true,
+                side: Some(WallSide::Right),
+            } => {
+                (*player.1).linvel = Vec2::new(200., -200.);
+            }
+            _ => (*player.1).linvel = Vec2::new(200., (*player.1).linvel.y),
+        }
+        println!("LINVEL : {:?}", (*player.1).linvel)
     }
 }
 
@@ -233,14 +331,25 @@ fn spawn_floor(
         ))
         .insert(CollisionGroups::new(Group::ALL, Group::GROUP_1))
         .add_child(mesh_container);
+
     commands
         .spawn()
-        .insert(Name::from("Floor"))
+        .insert(Name::from("Wall2"))
         .insert_bundle(SpatialBundle {
-            transform: Transform::from_xyz(-50., -50., 0.),
+            transform: Transform::from_xyz(220., 0., 0.),
             ..Default::default()
         })
-        .insert(Collider::cuboid((55) as f32, TILE_HEIGHT / 2.))
-        .insert(CollisionGroups::new(Group::ALL, Group::GROUP_2))
-        .add_child(mesh_container);
+        .insert(Collider::cuboid(TILE_HEIGHT / 2., TILE_HEIGHT * 2.))
+        .insert(Friction::default())
+        .insert(CollisionGroups::new(Group::ALL, Group::GROUP_1));
+    commands
+        .spawn()
+        .insert(Name::from("Wall1"))
+        .insert_bundle(SpatialBundle {
+            transform: Transform::from_xyz(-120., -120., 0.),
+            ..Default::default()
+        })
+        .insert(Collider::cuboid(TILE_HEIGHT / 2., TILE_HEIGHT * 2.))
+        .insert(Friction::default())
+        .insert(CollisionGroups::new(Group::ALL, Group::GROUP_1));
 }
