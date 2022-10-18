@@ -1,4 +1,4 @@
-use bevy::{math::vec2, prelude::*, sprite::MaterialMesh2dBundle};
+use bevy::{ecs::system::EntityCommands, math::vec2, prelude::*, sprite::MaterialMesh2dBundle};
 use bevy_1::utils::{draw_line, draw_line_colored};
 use bevy_inspector_egui::{Inspectable, RegisterInspectable, WorldInspectorPlugin};
 use bevy_inspector_egui_rapier::InspectableRapierPlugin;
@@ -25,8 +25,10 @@ fn main() {
         .register_inspectable::<MeshType>()
         .add_startup_system(setup_physics)
         .add_startup_system(spawn_floor)
-        .add_startup_system_to_stage(StartupStage::PreStartup, setup)
-        .add_startup_system_to_stage(StartupStage::PostStartup, add_debug_view)
+        // .add_startup_system_to_stage(StartupStage::Startup, setup.la)
+        .add_startup_system(setup.label("setup"))
+        // .add_system(system)
+        // .add_startup_system_to_stage(StartupStage::PostStartup, add_debug_view)
         .add_system(is_player_on_ground)
         .add_system(is_player_on_wall)
         .add_system(handle_input.after(is_player_on_ground))
@@ -59,6 +61,8 @@ enum MeshType {
 struct FloorTile(i32);
 #[derive(Component)]
 struct Player;
+#[derive(Component)]
+struct DebugBox;
 
 fn setup_physics(mut commands: Commands) {
     /* Create the ground. */
@@ -125,9 +129,9 @@ fn is_player_on_ground(
 ) {
     let player_transform = player_q.get_single().unwrap();
 
-    let shape = Collider::cuboid((PLAYER_SIZE / 2.) - 3., 2.0);
+    let shape = Collider::cuboid((PLAYER_SIZE / 2.) - 3., 2.);
     let shape_pos = Vec2::new(1.0, 2.0);
-    let shape_rot = 0.8;
+    let shape_rot = 0.0;
     let shape_vel = Vec2::new(0.1, 0.4);
     let max_toi = 4.0;
 
@@ -149,7 +153,6 @@ fn is_player_on_ground(
     if let Some((_entity, _toi)) =
         rapier_context.cast_shape(ray_pos, shape_rot, ray_dir, &shape, max_toi, filter)
     {
-        println!("Detect!");
         match *is_player_in_floor {
             IsPlayerInFloor(true) => {
                 *can_jump = CanJump(true);
@@ -172,32 +175,66 @@ fn is_player_on_ground(
         }
     }
 }
-fn add_debug_view(
-    mut commands: Commands,
-    player_q: Query<Entity, With<Player>>,
-    world: &World,
+fn add_debug_view<'a>(
+    mut commands: &'a mut EntityCommands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let player = player_q.get_single().unwrap();
-    // world.query()
-    commands.entity(player).insert_bundle(MaterialMesh2dBundle {
-        material: materials.add(ColorMaterial {
-            color: Color::rgba(1., 1., 1., 0.5),
-            ..Default::default()
-        }),
-        mesh: meshes
-            .add(Mesh::from(shape::Quad {
-                size: Vec2::new(PLAYER_SIZE, 5.),
-                flip: false,
-            }))
-            .into(),
+    commands.with_children(|parent| {
+        parent
+            .spawn_bundle(MaterialMesh2dBundle {
+                material: materials.add(ColorMaterial {
+                    color: Color::rgba(1., 1., 1., 0.5),
+                    ..Default::default()
+                }),
+                transform: Transform::from_xyz(0., -PLAYER_SIZE / 2., 1.),
+                mesh: meshes
+                    .add(Mesh::from(shape::Quad {
+                        size: Vec2::new(PLAYER_SIZE - 6., 2. + (1. * 4.)),
+                        flip: false,
+                    }))
+                    .into(),
 
-        ..default()
+                ..default()
+            })
+            .insert(DebugBox);
+
+        parent
+            .spawn_bundle(MaterialMesh2dBundle {
+                material: materials.add(ColorMaterial {
+                    color: Color::rgba(0.2, 1.0, 0.3, 0.5),
+                    ..Default::default()
+                }),
+                transform: Transform::from_xyz(PLAYER_SIZE / 2. * -1., 0., 1.),
+                mesh: meshes
+                    .add(Mesh::from(shape::Quad {
+                        size: Vec2::new(2. + (1. * 4.), PLAYER_SIZE - 2.),
+                        flip: false,
+                    }))
+                    .into(),
+
+                ..default()
+            })
+            .insert(DebugBox);
+
+        parent
+            .spawn_bundle(MaterialMesh2dBundle {
+                material: materials.add(ColorMaterial {
+                    color: Color::rgba(0.2, 1.0, 0.3, 0.5),
+                    ..Default::default()
+                }),
+                transform: Transform::from_xyz(PLAYER_SIZE / 2., 0., 1.),
+                mesh: meshes
+                    .add(Mesh::from(shape::Quad {
+                        size: Vec2::new(2. + (1. * 4.), PLAYER_SIZE - 2.),
+                        flip: false,
+                    }))
+                    .into(),
+
+                ..default()
+            })
+            .insert(DebugBox);
     });
-
-    // commands.entity(player)
-    // println!("COMPONENTS PLAYER- {:?}", playerCommands.log_components())
 }
 
 fn handle_input(
@@ -261,17 +298,17 @@ fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn_bundle(Camera2dBundle::default());
-    commands
-        .spawn_bundle(MaterialMesh2dBundle {
-            mesh: meshes
-                .add(Mesh::from(shape::Quad {
-                    size: vec2(PLAYER_SIZE, PLAYER_SIZE),
-                    flip: false,
-                }))
-                .into(),
-            material: materials.add(ColorMaterial::from(Color::PURPLE)),
-            ..default()
-        })
+    let mut player = commands.spawn_bundle(MaterialMesh2dBundle {
+        mesh: meshes
+            .add(Mesh::from(shape::Quad {
+                size: vec2(PLAYER_SIZE, PLAYER_SIZE),
+                flip: false,
+            }))
+            .into(),
+        material: materials.add(ColorMaterial::from(Color::PURPLE)),
+        ..default()
+    });
+    player
         .insert(Player)
         .insert(Name::from("Player"))
         .insert(Collider::cuboid(PLAYER_SIZE / 2., PLAYER_SIZE / 2.))
@@ -281,6 +318,8 @@ fn setup(
         .insert(Velocity::default())
         .insert(CollisionGroups::new(Group::ALL, Group::GROUP_2))
         .insert(GravityScale(5.0));
+
+    add_debug_view(&mut player, meshes, materials);
 }
 
 fn spawn_floor(
